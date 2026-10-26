@@ -1,0 +1,64 @@
+{
+  "app": "job-radar",
+  "dir": "~/projects/job-radar",
+  "image": "job-radar",
+  "stable_tag": "local",
+  "compose_service": "web",
+  "promote_services": [
+    "web",
+    "crawler"
+  ],
+  "stable_container": "job-radar-web-1",
+  "stable_service": "job-radar@docker",
+  "canary": {
+    "name": "job-radar-web-canary",
+    "service": "job-radar-canary",
+    "env_file": ".env",
+    "env": {
+      "PORT": "8080"
+    },
+    "port": 8080,
+    "networks": [
+      "job-radar_internal",
+      "traefik-network"
+    ],
+    "command": [
+      "node",
+      "dist/src/server.js"
+    ],
+    "memory": "256m",
+    "cpus": "0.3",
+    "health_path": "/health"
+  },
+  "route": {
+    "host": "jobs.docaohieu.com",
+    "middlewares": [
+      "job-radar-tailnet@docker",
+      "app-chain@file"
+    ],
+    "dynamic_dir": "~/traefik/routes.d",
+    "traefik_network": "traefik-network",
+    "traefik_address": "100.64.0.4",
+    "canary_host": "job-radar-canary.docaohieu.com"
+  },
+  "migrations_dir": "/app/migrations",
+  "traefik_instance": "oracle",
+  "synthetic": {
+    "base": "https://jobs.docaohieu.com",
+    "paths": [
+      "/health",
+      "/",
+      "/api/state"
+    ],
+    "rps": 3
+  },
+  "analysis": {
+    "weight": 10,
+    "duration_s": 600,
+    "check_every_s": 30,
+    "max_error_ratio": 0.01,
+    "max_error_ratio_vs_stable": 2.0,
+    "max_p95_vs_stable": 1.5,
+    "p95_slack_s": 0.05
+  }
+}

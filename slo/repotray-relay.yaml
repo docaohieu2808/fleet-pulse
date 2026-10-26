@@ -1,0 +1,26 @@
+version: "prometheus/v1"
+service: "repotray-relay"
+labels:
+  app: "repotray-relay"
+  host: "cloudflare"
+slos:
+  # Black-box only: nothing runs on the host. Each failed probe is a failed event.
+  - name: "availability"
+    objective: 99.5
+    description: "99.5% of external probes to repotray-relay succeed over 30 days."
+    sli:
+      events:
+        error_query: (sum(count_over_time(probe_success{job="blackbox-http",app="repotray-relay"}[{{.window}}])) - sum(sum_over_time(probe_success{job="blackbox-http",app="repotray-relay"}[{{.window}}])))
+        total_query: sum(count_over_time(probe_success{job="blackbox-http",app="repotray-relay"}[{{.window}}]))
+    alerting:
+      name: SLORepotrayRelayAvailability
+      labels:
+        category: slo
+      annotations:
+        summary: "repotray-relay: error budget is burning too fast"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning

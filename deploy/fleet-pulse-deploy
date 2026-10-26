@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Canary deploy for a Docker Compose app behind Traefik.
+
+  fleet-pulse-deploy job-radar                 build the app dir, canary it, promote or roll back
+  fleet-pulse-deploy job-radar --src DIR       build from another source dir (e.g. a test copy)
+  fleet-pulse-deploy job-radar --skip-canary   promote straight away (additive migrations); still checked and recorded
+  fleet-pulse-deploy job-radar --abort         remove a leftover canary and its traffic split
+
+Exit codes: 0 promoted (or aborted on request), 1 rolled back / aborted / promote failed, 2 busy, 3 refused.
+"""
+import argparse
+import fcntl
+import json
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import time
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from fleetpulse import canary, docker_ops, events, prom  # noqa: E402
+from fleetpulse.traffic import SyntheticTraffic  # noqa: E402
+
+log = canary.log
+
+
+def stop_on_signal(signum, _frame):
+    # SIGTERM (timeout, systemd) and SIGHUP (ssh dropped) must run the same cleanup as Ctrl-C.
+    raise SystemExit(128 + signum)
+
+
+def git_rev(path: str) -> str:
+    try:
+        rev = docker_ops.sh("git", "rev-parse", "--short", "HEAD", cwd=path, capture=True)
+        dirty = docker_ops.sh("git", "status", "--porcelain", cwd=path, capture=True)
+        return rev + ("-dirty" if dirty else "")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def take_lock(app: str):
+    state = pathlib.Path(os.path.expanduser("~/.local/state/fleet-pulse"))
+    state.mkdir(parents=True, exist_ok=True)
+    lock = open(state / f"{app}.lock", "a")  # user-owned directory: no clobbering through a shared /tmp
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return None
+    return lock
+
+
+def skip_canary(cfg: dict, image_ref: str, app_dir: str, base_event: dict) -> int:
+    """Promote without a canary (additive migrations), but still verify through Traefik and restore on failure."""
+    stable_ref = f"{cfg['image']}:{cfg['stable_tag']}"
+    previous = docker_ops.image_id(stable_ref)
+    if previous:
+        docker_ops.sh("docker", "tag", stable_ref, f"{cfg['image']}:previous")
+    if docker_ops.run_stable(cfg, image_ref, app_dir) and docker_ops.wait_routable(cfg, host=cfg["route"]["host"]):
+        events.record({**base_event, "result": "promoted", "reason": "--skip-canary", "previous_image": previous})
+        log(f"promoted {image_ref} without canary")
+        return 0
+    restored = bool(previous) and docker_ops.run_stable(cfg, f"{cfg['image']}:previous", app_dir)
+    outcome = "previous version restored" if restored else "RESTORE FAILED: fix by hand"
+    events.record({**base_event, "result": "promote_failed", "reason": f"--skip-canary: new version unhealthy; {outcome}",
+                   "previous_image": previous})
+    log(f"PROMOTE FAILED: {outcome}")
+    return 1
+
+
+def migration_change(cfg: dict, image_ref: str) -> str | None:
+    """None when the new image adds or edits no migration; otherwise why the canary must be refused.
+    A canary shares the stable version's database: a schema change cannot be rolled back cleanly."""
+    try:
+        old = docker_ops.migrations(f"{cfg['image']}:{cfg['stable_tag']}", cfg["migrations_dir"])
+        new = docker_ops.migrations(image_ref, cfg["migrations_dir"])
+    except subprocess.CalledProcessError as e:
+        return f"cannot read migrations ({e}); refusing rather than guessing"
+    added = sorted(set(new) - set(old))
+    edited = sorted(n for n in set(new) & set(old) if new[n] != old[n])
+    if added or edited:
+        return f"new migrations {added}, edited migrations {edited}"
+    return None
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("app")
+    p.add_argument("--src", help="build context (default: the app dir)")
+    p.add_argument("--skip-canary", action="store_true")
+    p.add_argument("--abort", action="store_true")
+    args = p.parse_args()
+    signal.signal(signal.SIGTERM, stop_on_signal)
+    signal.signal(signal.SIGHUP, stop_on_signal)
+
+    cfg = json.loads((HERE / "apps" / f"{args.app}.json").read_text())
+    app_dir = os.path.expanduser(cfg["dir"])
+    src = os.path.abspath(os.path.expanduser(args.src)) if args.src else app_dir
+
+    lock = take_lock(cfg["app"])
+    if lock is None:
+        log("another deploy of this app is running")
+        return 2
+
+    if args.abort:
+        problems = canary.cleanup(docker_ops, cfg)
+        events.record({"app": cfg["app"], "result": "aborted", "reason": "; ".join(["manual --abort", *problems])})
+        log("canary and traffic split removed" if not problems else f"abort incomplete: {problems}")
+        return 0 if not problems else 1
+    if docker_ops.canary_exists(cfg):
+        log("a canary is already present; run with --abort first")
+        return 2
+
+    rev = git_rev(src)
+    tag = "c" + time.strftime("%y%m%d%H%M%S")
+    image_ref = f"{cfg['image']}:{tag}"
+    base_event = {"app": cfg["app"], "image": image_ref, "rev": rev, "src": src}
+    log(f"building {image_ref} from {src} ({rev})")
+    docker_ops.build(src, cfg["image"], tag)
+
+    if args.skip_canary:
+        return skip_canary(cfg, image_ref, app_dir, base_event)
+
+    refusal = migration_change(cfg, image_ref)
+    if refusal:
+        events.record({**base_event, "result": "refused", "reason": refusal})
+        log(f"refused: {refusal}. Ship schema changes backward-compatible, then --skip-canary.")
+        return 3
+
+    try:
+        result = canary.run(cfg, image_ref, app_dir, base_event, ops=docker_ops, prom=prom, events=events,
+                            traffic_cls=SyntheticTraffic)
+    finally:
+        try:
+            docker_ops.prune_canary_images(cfg)
+        except subprocess.CalledProcessError as e:  # housekeeping must not hide the deploy result
+            log(f"warn: could not prune old canary images: {e}")
+    return 0 if result == "promoted" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

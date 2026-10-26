@@ -1,0 +1,33 @@
+# Excerpt of server-3 ~/monitoring/alertmanager/alertmanager.yml: the parts Fleet Pulse adds. Tokens are redacted;
+# the real values live only in that file, app/.env (FLEET_PULSE_TOKEN) and the Worker secret (HEARTBEAT_TOKEN).
+route:
+  routes:
+    # Heartbeat to the dead man's switch outside the fleet. First and without continue, so the always-firing
+    # Watchdog alert reaches nothing else.
+    - receiver: heartbeat
+      matchers: [alertname = Watchdog]
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+    # Fleet Pulse sees every cluster alert (it decides which ones open an incident); the normal email and
+    # Telegram routes below still run.
+    - receiver: fleet-pulse
+      matchers: [service != noisy-batch-job]
+      group_by: [alertname, instance, app]
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 8760h
+      continue: true
+receivers:
+  - name: heartbeat
+    webhook_configs:
+      - url: https://watchdog.example.com/heartbeat
+        send_resolved: false          # a "resolved" Watchdog means Prometheus died: never a heartbeat
+        http_config:
+          authorization: { credentials: "<HEARTBEAT_TOKEN>" }
+  - name: fleet-pulse
+    webhook_configs:
+      - url: http://fleet-pulse:8080/api/alertmanager
+        send_resolved: true
+        http_config:
+          authorization: { credentials: "<FLEET_PULSE_TOKEN>" }

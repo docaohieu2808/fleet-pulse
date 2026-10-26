@@ -1,0 +1,37 @@
+# Fleet Pulse on server-3, next to Prometheus, Loki and Alertmanager (same node as its dependencies).
+services:
+  fleet-pulse:
+    build: .
+    image: fleet-pulse:local
+    container_name: fleet-pulse
+    restart: unless-stopped
+    # FLEET_PULSE_TOKEN (bearer token for writes) lives in .env, which is not committed.
+    env_file: .env
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      ALERTMANAGER_URL: http://alertmanager:9093
+    volumes:
+      - ./data:/data
+      - ../slo:/slo:ro
+    networks: [monitoring-network, traefik-network]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: traefik-network
+      traefik.http.routers.fleet-pulse.rule: Host(`pulse.docaohieu.com`)
+      # Tailnet-only, and like grafana not on the IPv6 entrypoints (docker-proxy hides the client address).
+      traefik.http.routers.fleet-pulse.entrypoints: websecure
+      traefik.http.routers.fleet-pulse.tls: "true"
+      traefik.http.routers.fleet-pulse.middlewares: tailnet-only@file
+      traefik.http.services.fleet-pulse.loadbalancer.server.port: "8080"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128M }
+
+networks:
+  monitoring-network: { external: true }
+  traefik-network: { external: true }

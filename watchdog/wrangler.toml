@@ -1,0 +1,17 @@
+name = "fleet-watchdog"
+main = "src/index.js"
+# account_id comes from CLOUDFLARE_ACCOUNT_ID
+compatibility_date = "2026-05-01"
+workers_dev = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fleet-watchdog"
+database_id = "ccea24aa-b292-420c-92e0-9d1e1de20614"
+
+[triggers]
+crons = ["*/2 * * * *"]
+
+[[routes]]
+pattern = "watchdog.docaohieu.com"
+custom_domain = true

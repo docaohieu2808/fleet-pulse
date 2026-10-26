@@ -1,0 +1,23 @@
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "26", cache: npm, cache-dependency-path: app/ui/package-lock.json }
+      - name: Canary controller tests
+        run: cd deploy && python -m unittest discover -s tests -t . -v
+      - name: Service tests
+        run: cd app && python -m unittest discover -s tests -t . -v
+      - name: Watchdog tests
+        run: node --test watchdog/test/
+      - name: Dashboard type check and build
+        run: cd app/ui && npm ci --no-audit --no-fund && npm run build
+      - name: Shell scripts
+        run: bash -n generate-slo-rules.sh

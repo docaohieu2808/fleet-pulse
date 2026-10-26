@@ -1,0 +1,7 @@
+__pycache__/
+app/data/
+*.pyc
+app/ui/node_modules/
+app/ui/dist/
+app/.env
+watchdog/.wrangler/

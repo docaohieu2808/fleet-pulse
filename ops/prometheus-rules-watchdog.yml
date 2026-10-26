@@ -1,0 +1,11 @@
+groups:
+  - name: watchdog
+    rules:
+      # Always firing on purpose. Alertmanager forwards it every 5 minutes to watchdog.docaohieu.com
+      # (a Cloudflare Worker outside the fleet); when it stops arriving, that Worker sends Telegram.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Heartbeat: Prometheus and Alertmanager on server-3 are alive"

@@ -1,0 +1,22 @@
+  # Example targets (the real list has 31 apps), probed from server-3 (inside the tailnet). Fleet Pulse lists them from
+  # here. The module per target comes from the __param_module label. page="no" = shown, never alerted.
+  - job_name: apps
+    metrics_path: /probe
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['https://www.example.com']
+        labels: {app: 'portfolio', name: 'Portfolio', app_group: 'products', host: 'cloudflare', link: 'https://www.example.com', __param_module: app_ok}
+      - targets: ['https://lab.example.com']
+        labels: {app: 'lab', name: 'Lab platform (sign-in page)', app_group: 'devops', host: 'node-1', link: 'https://lab.example.com', __param_module: app_gated}
+      - targets: ['https://jobs.example.com/health']
+        labels: {app: 'job-radar', name: 'Job Radar', app_group: 'daily', host: 'node-4', link: 'https://jobs.example.com', __param_module: app_tailnet}
+      - targets: ['https://grafana.example.com']
+        labels: {app: 'grafana', name: 'Grafana', app_group: 'observability', host: 'node-3', link: 'https://grafana.example.com', __param_module: app_tailnet, page: 'no'}
+
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

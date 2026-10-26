@@ -1,0 +1,48 @@
+version: "prometheus/v1"
+service: "covumon"
+labels:
+  app: "covumon"
+  host: "loadbalancer"
+slos:
+  # Real requests through Traefik: a 5xx is a failed request.
+  - name: "availability"
+    objective: 99.5
+    description: "99.5% of requests to covumon answer without a 5xx over 30 days."
+    sli:
+      events:
+        error_query: (sum(rate(traefik_service_requests_total{instance="loadbalancer",service="covumon-backend@file",code=~"5.."}[{{.window}}])) or vector(0))
+        total_query: sum(rate(traefik_service_requests_total{instance="loadbalancer",service="covumon-backend@file"}[{{.window}}]))
+    alerting:
+      name: SLOCovumonAvailability
+      labels:
+        category: slo
+      annotations:
+        summary: "covumon: error budget is burning too fast"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+
+  # A request slower than 1.2s counts as failed. Objective set just under the measured
+  # baseline at setup time, so the budget tracks regressions rather than today's normal.
+  - name: "latency"
+    objective: 98
+    description: "98% of requests to covumon finish within 1.2s over 30 days."
+    sli:
+      events:
+        error_query: (sum(rate(traefik_service_request_duration_seconds_bucket{instance="loadbalancer",service="covumon-backend@file",le="+Inf"}[{{.window}}])) - sum(rate(traefik_service_request_duration_seconds_bucket{instance="loadbalancer",service="covumon-backend@file",le="1.2"}[{{.window}}])))
+        total_query: sum(rate(traefik_service_request_duration_seconds_bucket{instance="loadbalancer",service="covumon-backend@file",le="+Inf"}[{{.window}}]))
+    alerting:
+      name: SLOCovumonLatency
+      labels:
+        category: slo
+      annotations:
+        summary: "covumon latency: error budget is burning too fast"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning

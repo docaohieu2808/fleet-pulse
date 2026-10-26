@@ -1,0 +1,28 @@
+version: "prometheus/v1"
+service: "job-radar"
+labels:
+  app: "job-radar"
+  host: "oracle"
+slos:
+  # Probe-based, not Traefik-request-based: the route comes from Docker labels, so when the container stops
+  # Traefik drops the router and answers 404 without touching the service's metrics. A request-based SLI
+  # saw 0% errors during a full outage (drill, 24 Oct 2026).
+  - name: "availability"
+    objective: 99.5
+    description: "99.5% of probes to job-radar succeed over 30 days. A sample SLO: only I use this app; it is where canary deploys run."
+    sli:
+      events:
+        error_query: (sum(count_over_time(probe_success{job="blackbox-http",app="job-radar"}[{{.window}}])) - sum(sum_over_time(probe_success{job="blackbox-http",app="job-radar"}[{{.window}}])))
+        total_query: sum(count_over_time(probe_success{job="blackbox-http",app="job-radar"}[{{.window}}]))
+    alerting:
+      name: SLOJobRadarAvailability
+      labels:
+        category: slo
+      annotations:
+        summary: "job-radar: error budget is burning too fast"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning

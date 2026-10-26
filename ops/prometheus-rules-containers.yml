@@ -1,0 +1,26 @@
+# Excerpt of the fleet alert rules (server-3 ~/monitoring/prometheus/rules/alerts.yml) that Fleet Pulse relies on.
+groups:
+  - name: containers
+    rules:
+      # A container that keeps restarting is never "down" for ContainerDown (it is seen again within seconds).
+      # Each restart resets its cgroup CPU counter, so counter resets count restarts. A recreate (deploy) makes a
+      # new series and does not count. Found 24 Oct 2026: job-radar crawler crash-looped 5.5 hours unnoticed.
+      - alert: ContainerCrashLooping
+        expr: sum by (instance, name) (resets(container_cpu_usage_seconds_total{name!="",name!~"lab-.*"}[15m])) >= 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} on {{ $labels.instance }} is crash-looping"
+          description: "{{ $labels.name }} restarted {{ $value }} times in 15 minutes"
+      # working_set, not usage: usage counts page cache (Prometheus at 24% real use read as >90%).
+      - alert: ContainerHighMemoryUsage
+        expr: (container_memory_working_set_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} * 100) > 90 and container_spec_memory_limit_bytes{name!=""} > 0
+        for: 10m
+        labels:
+          severity: warning
+      # page="no": an app shown on the dashboard that the owner chose not to be alerted about.
+      - alert: EndpointDown
+        expr: 'probe_success{page!="no"} == 0'
+        for: 2m
+        labels:
+          severity: critical
